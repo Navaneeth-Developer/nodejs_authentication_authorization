@@ -7,6 +7,8 @@ import {
   verifyEmailHandler,
   forgotPasswordHandler,
   resetPasswordHandler,
+  googleAuthStartHandler,
+  googleAuthCallbackHandler,
 } from "../controllers/auth/auth.controller";
 
 const router = Router();
@@ -18,4 +20,5 @@ router.post("/refresh-token", refreshTokenHandler); // Placeholder for refresh t
 router.post("/logout", logoutHandler); // Placeholder for logout route
 router.post("/forgot-password", forgotPasswordHandler); // Placeholder for forgot password route
 router.post("/reset-password", resetPasswordHandler); // Placeholder for reset password route
+
 export default router;

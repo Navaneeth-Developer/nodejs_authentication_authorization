@@ -1,3 +1,4 @@
+import { email } from "zod";
 import { Request, Response } from "express";
 import { loginSchema, registerSchema } from "./auth.schema";
 import { User } from "../../models/user.model";
@@ -10,10 +11,20 @@ import {
   verifyRefreshToken,
 } from "../../lib/token";
 import crypto from "crypto";
-import { ca } from "zod/v4/locales";
+import { OAuth2Client } from "google-auth-library";
 
 function getAppUrl() {
   return process.env.APP_URL || `http://localhost:${process.env.PORT || 4000}`;
+}
+
+function getGoogleClient() {
+  const clientId = process.env.GOOGLE_CLIENT_ID || "";
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || "";
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || "";
+  if (!clientId || !clientSecret) {
+    throw new Error("Google OAuth credentials are not set");
+  }
+  return new OAuth2Client({ clientId, clientSecret, redirectUri });
 }
 
 export async function registerHandler(req: Request, res: Response) {
@@ -291,6 +302,105 @@ export async function resetPasswordHandler(req: Request, res: Response) {
     user.tokenVersion += 1;
     await user.save();
     return res.status(200).json({ message: "Password reset successfully" });
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+export async function googleAuthStartHandler(req: Request, res: Response) {
+  try {
+    const oauth2Client = getGoogleClient();
+    const scopes = ["openid", "profile", "email"];
+    const authorizationUrl = oauth2Client.generateAuthUrl({
+      access_type: "offline",
+      prompt: "consent",
+      scope: scopes,
+    });
+    console.log("Google Auth URL:", authorizationUrl);
+
+    // return res.status(200).json({ url: authorizationUrl });
+    return res.redirect(authorizationUrl);
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+export async function googleAuthCallbackHandler(req: Request, res: Response) {
+  // Implementation for Google OAuth callback handler
+  console.log("googleAuth");
+
+  const code = req.query.code as string | undefined;
+  if (!code) {
+    return res.status(400).json({ message: "Authorization code is missing" });
+  }
+
+  try {
+    const oauth2Client = getGoogleClient();
+    const { tokens } = await oauth2Client.getToken(code);
+    if (!tokens.id_token) {
+      return res
+        .status(400)
+        .json({ message: "ID token is missing in response" });
+    }
+    const ticket = await oauth2Client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+    const payload = ticket.getPayload();
+    console.log("payload==>>", payload);
+
+    const email = payload?.email;
+    const name = payload?.name || "No Name";
+    const emailVerified = payload?.email_verified;
+    if (!email || !emailVerified) {
+      return res.status(400).json({ message: "Email not verified by Google" });
+    }
+    const normalizedEmail = email.toLowerCase().trim();
+    let user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      const randomPassword = crypto.randomBytes(16).toString("hex");
+      const passwordHash = await hashPassword(randomPassword);
+      user = await User.create({
+        email: normalizedEmail,
+        passwordHash,
+        role: "user",
+        isEmailVerified: true,
+        twoFactorEnabled: false,
+        name,
+      });
+    } else {
+      if (!user.isEmailVerified) {
+        user.isEmailVerified = true;
+        await user.save();
+      }
+    }
+    const accessToken = createAccessToken(
+      user._id.toString(),
+      user.role as "user" | "admin",
+      user.tokenVersion
+    );
+    const refreshToken = createRefreshToken(
+      user._id.toString(),
+      user.tokenVersion
+    );
+    const isProd = process.env.NODE_ENV === "production";
+    res.cookie("refreshToken", refreshToken, {
+      httpOnly: true,
+      secure: isProd,
+      sameSite: isProd ? "strict" : "lax",
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+    });
+    return res.status(200).json({
+      message: "Login via Google successful",
+      user: {
+        id: user._id,
+        email: user.email,
+        role: user.role,
+        isEmailVerified: user.isEmailVerified,
+        name: user.name,
+      },
+      accessToken,
+    });
   } catch (error) {
     res.status(500).json({ message: "Internal server error" });
   }
