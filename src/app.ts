@@ -3,6 +3,8 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { dot } from "node:test/reporters";
 import authRoutes from "./routes/auth.routes";
+import userRoutes from "./routes/user.routes";
+import adminRoutes from "./routes/admin.routes";
 
 dotenv.config();
 const app = express();
@@ -15,5 +17,6 @@ app.get("/health", (req, res) => {
 });
 
 app.use("/auth", authRoutes);
-
+app.use("/user", userRoutes);
+app.use("/admin", adminRoutes);
 export default app;

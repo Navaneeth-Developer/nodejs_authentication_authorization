@@ -28,3 +28,15 @@ export const verifyRefreshToken = (token: string) => {
     throw new Error("Invalid token");
   }
 };
+
+export const verifyAccessToken = (token: string) => {
+  try {
+    return jwt.verify(token, process.env.JWT_ACCESS_SECRET!) as {
+      sub: string;
+      role: "user" | "admin";
+      tokenVersion: number;
+    };
+  } catch (error) {
+    throw new Error("Invalid token");
+  }
+};
