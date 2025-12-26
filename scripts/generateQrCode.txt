@@ -1,0 +1,2 @@
+Run below code in terminal to generate QR.
+npx ts node scripts/totp-qr.ts "otpauth:// url from setup api"

@@ -12,6 +12,7 @@ import {
 } from "../../lib/token";
 import crypto from "crypto";
 import { OAuth2Client } from "google-auth-library";
+import { authenticator } from "otplib";
 
 function getAppUrl() {
   return process.env.APP_URL || `http://localhost:${process.env.PORT || 4000}`;
@@ -120,7 +121,7 @@ export async function loginHandler(req: Request, res: Response) {
         .status(400)
         .json({ message: "Invalid data", errors: result.error.flatten() });
     }
-    const { email, password } = result.data;
+    const { email, password, twoFactorCode } = result.data;
     const normalizedEmail = email.toLowerCase().trim();
     const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
@@ -132,6 +133,23 @@ export async function loginHandler(req: Request, res: Response) {
     }
     if (!user.isEmailVerified) {
       return res.status(403).json({ message: "Email is not verified" });
+    }
+
+    if (user.twoFactorEnabled) {
+      if (!twoFactorCode || typeof twoFactorCode !== "string") {
+        return res.status(400).json({ message: "Two-factor code is required" });
+      }
+      if (!user.twoFactorSecret) {
+        return res.status(500).json({ message: "Two-factor secret not found" });
+      }
+    }
+
+    const is2FAValid = authenticator.check(
+      twoFactorCode || "",
+      user.twoFactorSecret || ""
+    );
+    if (user.twoFactorEnabled && !is2FAValid) {
+      return res.status(400).json({ message: "Invalid two-factor code" });
     }
     const accessToken = createAccessToken(
       user._id.toString(),
@@ -401,6 +419,68 @@ export async function googleAuthCallbackHandler(req: Request, res: Response) {
       },
       accessToken,
     });
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+export async function twoFASetuphandler(req: Request, res: Response) {
+  // Implementation for 2FA setup handler
+  const authReq = req as Request & { user?: any };
+  const authUser = authReq.user;
+  if (!authUser) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  try {
+    const user = await User.findById(authUser.id);
+    if (!user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const secret = authenticator.generateSecret();
+    const issuer = "AuthenticationApp";
+    const otpauth = authenticator.keyuri(user.email, issuer, secret);
+    user.twoFactorSecret = secret;
+    user.twoFactorEnabled = false;
+    await user.save();
+    return res.status(200).json({
+      message: "2FA setup initiated",
+      otpauth,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Internal server error" });
+  }
+}
+
+export async function twoFAVerifyHandler(req: Request, res: Response) {
+  // Implementation for 2FA verification handler
+  const authReq = req as Request & { user?: any };
+  const authUser = authReq.user;
+  if (!authUser) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+  const { twoFactorCode } = req.body as { twoFactorCode?: string };
+  console.log(twoFactorCode);
+
+  if (!twoFactorCode || typeof twoFactorCode !== "string") {
+    return res.status(400).json({ message: "Two-factor code is required" });
+  }
+  try {
+    const user = await User.findById(authUser.id);
+    if (!user || !user.twoFactorSecret) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const isValid = authenticator.verify({
+      token: twoFactorCode,
+      secret: user.twoFactorSecret,
+    });
+    if (!isValid) {
+      return res.status(400).json({ message: "Invalid two-factor code" });
+    }
+    user.twoFactorEnabled = true;
+    await user.save();
+    return res
+      .status(200)
+      .json({ message: "Two-factor authentication enabled successfully" });
   } catch (error) {
     res.status(500).json({ message: "Internal server error" });
   }
